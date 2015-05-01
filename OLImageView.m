@@ -10,18 +10,15 @@
 #import "OLImage.h"
 #import <QuartzCore/QuartzCore.h>
 
-@interface OLImageView () {
-    struct {
-        unsigned int didLoop : 1;
-        unsigned int shouldStartAnimating : 1;
-    } _delegateFlags;
-}
+@interface OLImageView ()
 
 @property (nonatomic, strong) OLImage *animatedImage;
 @property (nonatomic, strong) CADisplayLink *displayLink;
 @property (nonatomic) NSTimeInterval accumulator;
 @property (nonatomic) NSUInteger currentFrameIndex;
-@property (nonatomic) NSUInteger loopCountdown;
+@property (nonatomic) NSInteger loopCountdown;
+
+@property (nonatomic, strong) UITapGestureRecognizer *playRecognizer;
 
 @end
 
@@ -32,21 +29,57 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
 @synthesize runLoopMode = _runLoopMode;
 @synthesize displayLink = _displayLink;
 
-- (id)init
-{
-    self = [super init];
-    if (self) {
-        self.currentFrameIndex = 0;
+- (id)init {
+    if ((self = [super init])) {
+        self = [self initCommon];
     }
+    return self;
+}
+
+- (id)initWithCoder:(NSCoder *)aDecoder {
+    if ((self = [super initWithCoder:aDecoder])) {
+        self = [self initCommon];
+    }
+    return self;
+}
+
+- (id)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self = [self initCommon];
+    }
+    return self;
+}
+
+- (id)initWithImage:(UIImage *)image {
+    if ((self = [super initWithImage:image])) {
+        self = [self initCommon];
+    }
+    return self;
+}
+
+- (id)initWithImage:(UIImage *)image highlightedImage:(UIImage *)highlightedImage {
+    if ((self = [super initWithImage:image highlightedImage:highlightedImage])) {
+        self = [self initCommon];
+    }
+    return self;
+}
+
+- (id)initCommon {
+    self.currentFrameIndex = 0;
+    self.loopCountdown = 0;
+    self.accumulator = 0;
+    _isAnimationBeyondFirstFrame = NO;
+    
     return self;
 }
 
 - (CADisplayLink *)displayLink
 {
-    if (self.superview) {
-        if (!_displayLink && self.animatedImage && [self delegateShouldStartAnimating]) {
+    if (self.window && self.superview) {
+        if (!_displayLink && self.animatedImage) {
             _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(changeKeyframe:)];
             [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:self.runLoopMode];
+            _displayLink.paused = YES;
         }
     } else {
         [_displayLink invalidate];
@@ -57,13 +90,16 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
 
 - (NSString *)runLoopMode
 {
-    return _runLoopMode ?: NSDefaultRunLoopMode;
+    return _runLoopMode ?: NSRunLoopCommonModes; //NSDefaultRunLoopMode;
 }
 
 - (void)setRunLoopMode:(NSString *)runLoopMode
 {
     if (runLoopMode != _runLoopMode) {
-        [self stopAnimating];
+        BOOL wasAnimating = self.isAnimating;
+        
+        if (wasAnimating)
+            [self stopAnimating];
         
         NSRunLoop *runloop = [NSRunLoop mainRunLoop];
         [self.displayLink removeFromRunLoop:runloop forMode:_runLoopMode];
@@ -71,18 +107,9 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
         
         _runLoopMode = runLoopMode;
         
-        [self startAnimating];
+        if (wasAnimating)
+            [self startAnimating];
     }
-}
-
-- (void)setDelegate:(id<OLImageViewDelegate>)delegate
-{
-    if (delegate == _delegate) {
-        return;
-    }
-    _delegate = delegate;
-    _delegateFlags.didLoop = [delegate respondsToSelector:@selector(imageViewDidLoop:)];
-    _delegateFlags.shouldStartAnimating = [delegate respondsToSelector:@selector(imageViewShouldStartAnimating:)];
 }
 
 - (void)setImage:(UIImage *)image
@@ -91,30 +118,42 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
         return;
     }
     
-    [self stopAnimating];
-    
-    self.currentFrameIndex = 0;
-    self.loopCountdown = 0;
-    self.accumulator = 0;
-    
-    if ([image isKindOfClass:[OLImage class]] && image.images) {
-        [super setImage:nil];
-        self.animatedImage = (OLImage *)image;
-        self.loopCountdown = self.animatedImage.loopCount ?: NSUIntegerMax;
-        [self startAnimating];
+    if ([image isKindOfClass:[OLImage class]]) {
+        if ([(OLImage *)image isReady]) {
+            [self stopAnimating];
+            
+            self.currentFrameIndex = 0;
+            self.loopCountdown = 0;
+            self.accumulator = 0;
+            _isAnimationBeyondFirstFrame = NO;
+            
+            [super setImage:nil];
+            
+            self.animatedImage = (OLImage *)image;
+            
+            [self startAnimating];
+        }
     } else {
+        [self stopAnimating];
+        
+        self.currentFrameIndex = 0;
+        self.loopCountdown = 0;
+        self.accumulator = 0;
+        _isAnimationBeyondFirstFrame = NO;
+        
         self.animatedImage = nil;
+        
         [super setImage:image];
     }
+    
     [self.layer setNeedsDisplay];
 }
 
 - (void)setAnimatedImage:(OLImage *)animatedImage
 {
     _animatedImage = animatedImage;
-    if (animatedImage == nil) {
+    if (animatedImage == nil)
         self.layer.contents = nil;
-    }
 }
 
 - (BOOL)isAnimating
@@ -124,20 +163,20 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
 
 - (void)stopAnimating
 {
-    if (!self.animatedImage) {
-        [super stopAnimating];
+    if (!_animatedImage) {
+        if (self.animationImages)
+            [super stopAnimating];
         return;
     }
-    
-    self.loopCountdown = 0;
     
     self.displayLink.paused = YES;
 }
 
 - (void)startAnimating
 {
-    if (!self.animatedImage) {
-        [super startAnimating];
+    if (!_animatedImage) {
+        if (self.animationImages)
+            [super startAnimating];
         return;
     }
     
@@ -145,39 +184,136 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
         return;
     }
     
-    self.loopCountdown = self.animatedImage.loopCount ?: NSUIntegerMax;
+    if (!self.loopCountdown)
+        self.loopCountdown = self.animatedImage.loopCount ?: NSIntegerMax;
     
-    self.displayLink.paused = ! [self delegateShouldStartAnimating];
+    self.displayLink.paused = NO;
 }
 
-- (void)changeKeyframe:(CADisplayLink *)displayLink
-{
-    if (self.currentFrameIndex >= [self.animatedImage.images count] && [self.animatedImage isPartial]) {
-        return;
-    }
-    self.accumulator += fmin(displayLink.duration, kMaxTimeStep);
+- (NSTimeInterval)timeOffset {
+    NSTimeInterval timeOffset = 0;
     
-    while (self.accumulator >= self.animatedImage.frameDurations[self.currentFrameIndex]) {
-        self.accumulator -= self.animatedImage.frameDurations[self.currentFrameIndex];
-        if (++self.currentFrameIndex >= [self.animatedImage.images count] && ![self.animatedImage isPartial]) {
-            if (--self.loopCountdown == 0) {
-                [self stopAnimating];
+    if (_animatedImage) {
+        for (int frameIndex = 0; frameIndex < self.currentFrameIndex; ++frameIndex)
+            timeOffset += self.animatedImage.frameDurations[frameIndex];
+        timeOffset += self.accumulator;
+    }
+    
+    return timeOffset;
+}
+
+- (void)setTimeOffset:(NSTimeInterval)timeOffset {
+    if (_animatedImage) {
+        self.currentFrameIndex = 0;
+        self.accumulator = timeOffset;
+        [self changeKeyframe:nil];
+    }
+}
+
+- (void)changeKeyframe:(CADisplayLink *)displayLink {
+    if (_animatedImage) {
+        if (_currentFrameIndex >= [_animatedImage.images count]) {
+            if ([_animatedImage isPartial])
                 return;
+            else {
+                if (--self.loopCountdown <= 0) {
+                    self.currentFrameIndex = 0;
+                    [self stopAnimating];
+                    return;
+                }
+                self.currentFrameIndex = 0;
             }
-            self.currentFrameIndex = 0;
-            [self delegateDidLoop];
         }
-        self.currentFrameIndex = MIN(self.currentFrameIndex, [self.animatedImage.images count] - 1);
-        [self.layer setNeedsDisplay];
+        
+        if (!self.isHalted)
+            self.accumulator += fmin(displayLink.duration, kMaxTimeStep);
+        
+        while (self.currentFrameIndex < [self.animatedImage.images count] &&
+               self.accumulator >= self.animatedImage.frameDurations[self.currentFrameIndex]) {
+            self.accumulator -= self.animatedImage.frameDurations[self.currentFrameIndex];
+            
+            if (!_isAnimationBeyondFirstFrame && _onAnimationBeyondFirstFrameBlock)
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (_onAnimationBeyondFirstFrameBlock)
+                        _onAnimationBeyondFirstFrameBlock(self);
+                });
+            _isAnimationBeyondFirstFrame = YES;
+            
+            if (++self.currentFrameIndex >= [self.animatedImage.images count] && ![self.animatedImage isPartial]) {
+                self.currentFrameIndex = 0;
+                
+                if (--self.loopCountdown <= 0) {
+                    [self stopAnimating];
+                    return;
+                }
+                self.currentFrameIndex = 0;
+            }
+            
+            [self.layer setNeedsDisplay];
+        }
     }
 }
 
-- (void)displayLayer:(CALayer *)layer
-{
-    if (!self.animatedImage || [self.animatedImage.images count] == 0) {
-        return;
+- (void)displayLayer:(CALayer *)layer {
+    UIImage *image = nil;
+    
+    if (_animatedImage) {
+        if ([_animatedImage isReady])
+            image = [_animatedImage.images objectAtIndex:MIN(self.currentFrameIndex, _animatedImage.images.count-1)];
+    } else
+        image = self.image;
+    
+    if (image) {
+        CGImageRef imageRef = image.CGImage;
+        
+        if (imageRef) {
+            CFRetain(imageRef);
+            
+            layer.contents = (__bridge_transfer id)imageRef;
+            layer.contentsScale = image.scale;
+        }
     }
-    layer.contents = (__bridge id)([[self.animatedImage.images objectAtIndex:self.currentFrameIndex] CGImage]);
+}
+
+- (BOOL)waitForFullLoad {
+    if (_waitForFullLoad && (!_animatedImage || ![_animatedImage isPartial]))
+        _waitForFullLoad = NO;
+    return _waitForFullLoad;
+}
+
+- (void)setWaitForFullLoad:(BOOL)waitForFullLoad {
+    if (waitForFullLoad) {
+        if (!self.playRecognizer) {
+            self.playRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tappedOverrideWaitForFullLoad:)];
+            [self addGestureRecognizer:self.playRecognizer];
+            self.userInteractionEnabled = YES;
+        }
+    } else {
+        if (self.playRecognizer) {
+            self.userInteractionEnabled = NO;
+            [self removeGestureRecognizer:self.playRecognizer];
+            self.playRecognizer = nil;
+        }
+    }
+    
+    _waitForFullLoad = waitForFullLoad;
+}
+
+- (BOOL)isHalted {
+    BOOL isHalted = _halt;
+    
+    if (self.waitForFullLoad) {
+        if (![_animatedImage isPartial])
+            self.waitForFullLoad = NO;
+        else
+            isHalted = YES;
+    }
+    
+    return isHalted;
+}
+
+- (IBAction)tappedOverrideWaitForFullLoad:(id)sender {
+    self.waitForFullLoad = NO;
 }
 
 - (void)didMoveToWindow
@@ -186,11 +322,11 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
     if (self.window) {
         [self startAnimating];
     } else {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!self.window) {
-                [self stopAnimating];
-            }
-        });
+       dispatch_async(dispatch_get_main_queue(), ^{
+           if (!self.window) {
+               [self stopAnimating];
+           }
+       });
     }
 }
 
@@ -225,20 +361,4 @@ const NSTimeInterval kMaxTimeStep = 1; // note: To avoid spiral-o-death
     return self.image.size;
 }
 
-#pragma mark - delegation
-- (BOOL)delegateShouldStartAnimating {
-    
-    if (self.delegate && _delegateFlags.shouldStartAnimating) {
-        return [self.delegate imageViewShouldStartAnimating:self];
-    } else {
-        return YES;
-    }
-}
-
-- (void)delegateDidLoop {
-    
-    if (self.delegate && _delegateFlags.didLoop) {
-        [self.delegate imageViewDidLoop:self];
-    }
-}
 @end

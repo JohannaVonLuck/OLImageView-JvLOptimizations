@@ -8,9 +8,14 @@
 
 #import <UIKit/UIKit.h>
 
-#import "OLImageViewDelegate.h"
+@class OLImageView;
 
-@interface OLImageView : UIImageView
+typedef void (^OLImageViewSelfBlock)(OLImageView *imageView);
+
+@interface OLImageView : UIImageView {
+    BOOL _waitForFullLoad;
+    BOOL _isAnimationBeyondFirstFrame;
+}
 
 /**
  The animation runloop mode.
@@ -19,6 +24,14 @@
  */
 @property (nonatomic, copy) NSString *runLoopMode;
 
-@property (nonatomic, weak) id<OLImageViewDelegate> delegate;
+@property (nonatomic, readwrite) NSTimeInterval timeOffset;
+
+@property (nonatomic, assign) BOOL waitForFullLoad;
+@property (nonatomic, assign) BOOL halt;
+
+@property (nonatomic, readonly) BOOL isHalted;
+@property (nonatomic, readonly) BOOL isAnimationBeyondFirstFrame;
+
+@property (nonatomic, copy) OLImageViewSelfBlock onAnimationBeyondFirstFrameBlock;
 
 @end

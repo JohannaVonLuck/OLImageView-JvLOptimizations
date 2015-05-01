@@ -48,6 +48,15 @@
 + (instancetype)imageWithIncrementalData:(NSData *)data;
 
 /**
+ Creates and returns an image object with the Incremental Data processed
+ 
+ @param data The image data. This can be partial data or `nil`.
+ @param scale The image scale factor. Default is 1.0f.
+ @return A new image object with the specified data or partial container if none was provided.
+ */
++ (instancetype)imageWithIncrementalData:(NSData *)data scale:(CGFloat)scale;
+
+/**
  Update the image instance with new data
  
  @param data The image data. This can be partial data.
@@ -67,5 +76,12 @@
  Whether the instance is a partial or complete image.
  */
 @property (nonatomic, readonly, getter = isPartial) BOOL partial;
+@property (nonatomic, readonly, getter = isReady) BOOL ready;
+
+@end
+
+@interface UIImage (IncrementalData)
+
+@property (nonatomic, readonly, getter = isReady) BOOL ready;
 
 @end
